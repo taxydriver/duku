@@ -1,0 +1,36 @@
+# node / next
+node_modules/
+.next/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-lock.yaml
+.vscode/
+.DS_Store
+
+# env
+.env
+.env.*
+!.env.example
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+.envrc
+
+# build artifacts
+dist/
+build/
+coverage/
+
+# docker
+**/tmp/
+
+# Merlin data (MovieLens CSVs, ratings)
+services/merlin-api/app/data/
+services/merlin-api/app/data/
