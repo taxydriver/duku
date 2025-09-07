@@ -1,14 +1,18 @@
-version: "3.9"
+
+
 services:
   merlin-api:
     build: ./services/merlin-api
-    ports: ["8080:8080"]
+    container_name: merlin-api
+    restart: unless-stopped
+    env_file:
+      - ./services/merlin-api/.env
+    volumes:
+      - ./services/data/movielens25m:/app/data/movielens:ro
+      - ./artifacts:/models
+      - ./services/merlin-api/app:/app/app
+    ports:
+      - "8080:8080"
 
-  duku-ui:
-  
-    build: ./apps/duku-ui
-    depends_on: [merlin-api]
-    environment:
-      NODE_ENV: production
-      MERLIN_API: http://merlin-api:8080
-    ports: ["3000:3000"]
+volumes:
+  duku-models:

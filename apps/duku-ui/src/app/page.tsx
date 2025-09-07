@@ -1,13 +1,57 @@
-// apps/duku-ui/src/app/page.tsx
+"use client";
+
 import Link from "next/link";
+import { useEffect, useState } from "react";
 
 export default function HomePage() {
+  const [signedIn, setSignedIn] = useState(false);
+
+  // Check cookie on mount
+  useEffect(() => {
+    const match = document.cookie.match(/duku_user_id=([^;]+)/);
+    setSignedIn(!!match);
+  }, []);
+
+  const handleSignOut = async () => {
+    await fetch("/api/user/signout", { method: "POST" });
+    document.cookie = "duku_user_id=; Max-Age=0; path=/"; // clear client
+    setSignedIn(false);
+  };
+
   return (
     <div className="space-y-6">
       <h1 className="text-3xl font-bold">Welcome to Duku 🎬</h1>
       <p className="text-muted-foreground">
         Discover yourself by rating movies and playing with algorithms.
       </p>
+
+      {/* Auth actions */}
+      <div className="flex space-x-4">
+        {!signedIn && (
+          <>
+            <Link
+              href="/register"
+              className="rounded-md bg-green-600 text-white px-4 py-2 hover:bg-green-700 transition"
+            >
+              Register
+            </Link>
+            <Link
+              href="/signin"
+              className="rounded-md bg-blue-600 text-white px-4 py-2 hover:bg-blue-700 transition"
+            >
+              Sign In
+            </Link>
+          </>
+        )}
+        {signedIn && (
+          <button
+            onClick={handleSignOut}
+            className="rounded-md bg-red-600 text-white px-4 py-2 hover:bg-red-700 transition"
+          >
+            Sign Out
+          </button>
+        )}
+      </div>
 
       <div className="grid gap-4 sm:grid-cols-3">
         <Link

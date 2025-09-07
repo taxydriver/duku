@@ -1,35 +1,84 @@
+// apps/duku-ui/src/app/api/ratings/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 
-const MERLIN = process.env.MERLIN_API ?? "http://localhost:8080";
+const MERLIN = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8080";
 
-function getOrCreateUserId() {
-  const jar = cookies();
+async function getOrCreateSessionId() {
+  const jar = await cookies();
   let id = jar.get("duku_uid")?.value;
   if (!id) {
     id = `guest-${Math.random().toString(36).slice(2, 8)}`;
-    // httpOnly false so client pages can read it if needed (fine for a guest id)
     jar.set("duku_uid", id, {
       httpOnly: false,
       sameSite: "lax",
       path: "/",
-      maxAge: 60 * 60 * 24 * 365, // 1 year
+      maxAge: 60 * 60 * 24 * 365,
     });
+    console.log("[API /api/ratings] assigned new guest session_id:", id);
+  } else {
+    console.log("[API /api/ratings] found existing session_id:", id);
   }
   return id;
 }
 
 export async function POST(req: NextRequest) {
-  const body = await req.json(); // { movieId, value }
-  const userId = getOrCreateUserId();
+  const raw = (await req.json()) ?? {};
+  console.log("[API /api/ratings] incoming body from UI:", raw);
 
-  const r = await fetch(`${MERLIN}/ratings`, {
+  // Normalize incoming identifiers from UI components
+  const item_id =
+    raw.item_id ??
+    raw.id ??
+    raw.imdb_id ??
+    raw.imdbId ??
+    raw.movieId ??
+    null;
+
+  const event_type = raw.event_type ?? "like";
+  const context = raw.context && typeof raw.context === "object" ? raw.context : undefined;
+
+  if (!item_id) {
+    console.error("[API /api/ratings] missing item_id");
+    return NextResponse.json({ error: "item_id is required" }, { status: 400 });
+  }
+
+  const jar = await cookies();
+  const registeredUserId = jar.get("duku_user_id")?.value;
+  const sessionId = await getOrCreateSessionId();
+
+  const payload: Record<string, any> = {
+    user_id: registeredUserId ?? null,
+    session_id: sessionId,
+    item_id,
+    event_type, // "like" | "view" | "click" | "save"
+  };
+  if (context) {
+    payload.context = context;
+  }
+
+  console.log("[API /api/ratings] sending to Merlin /api/v1/events", payload);
+
+  const r = await fetch(`${MERLIN}/api/v1/events`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ ...body, userId }), // inject userId here
+    body: JSON.stringify(payload),
   });
 
   const text = await r.text();
-  if (!r.ok) return NextResponse.json({ error: text }, { status: r.status });
-  return NextResponse.json(JSON.parse(text));
+  console.log("[API /api/ratings] Merlin response", { status: r.status, length: text.length });
+
+  if (!r.ok) {
+    console.error("[API /api/ratings] Merlin error body:", text.slice(0, 200));
+    return NextResponse.json({ error: text }, { status: r.status });
+  }
+
+  try {
+    const json = JSON.parse(text);
+    console.log("[API /api/ratings] returning OK", json);
+    return NextResponse.json(json);
+  } catch {
+    console.error("[API /api/ratings] failed to parse Merlin JSON");
+    return NextResponse.json({ error: text }, { status: 502 });
+  }
 }

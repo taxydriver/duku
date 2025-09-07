@@ -16,6 +16,7 @@ export function usePosters<T extends MovieLite>(items: T[]) {
     let cancelled = false;
 
     (async () => {
+      console.log("[UI] Posters: preparing batch", { count: items.length });
       if (!items?.length) { setEnriched([]); return; }
 
       try {
@@ -32,8 +33,9 @@ export function usePosters<T extends MovieLite>(items: T[]) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
         });
-
+        console.log("[UI] Posters: response status", r.status);
         const { posters } = await r.json(); // [{ key, posterUrl }]
+        console.log("[UI] Posters: got", posters.length);
         const map = new Map<string, string | null>();
         (posters ?? []).forEach((p: any) => map.set(p.key, p.posterUrl));
 
