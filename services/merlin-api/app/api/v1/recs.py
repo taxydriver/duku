@@ -52,7 +52,6 @@ _pool = ConnectionPool(
     _DSN,
     min_size=1,
     max_size=5,          # keep this low; Supabase pooler is finite
-    max_wait=10,         # seconds to wait for a free connection before error
     kwargs={"autocommit": True},
 )
 
