@@ -2,7 +2,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 
-const MERLIN = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8080";
+// Ensure this route is always dynamic and never statically optimized
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
+const MERLIN_BASE = (process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8080").replace(/\/$/, "");
 
 async function getOrCreateSessionId() {
   const jar = await cookies();
@@ -14,6 +18,7 @@ async function getOrCreateSessionId() {
       sameSite: "lax",
       path: "/",
       maxAge: 60 * 60 * 24 * 365,
+      secure: process.env.NODE_ENV === "production",
     });
     console.log("[API /api/ratings] assigned new guest session_id:", id);
   } else {
@@ -23,17 +28,12 @@ async function getOrCreateSessionId() {
 }
 
 export async function POST(req: NextRequest) {
-  const raw = (await req.json()) ?? {};
+  const raw = (await req.json().catch(() => ({}))) ?? {};
   console.log("[API /api/ratings] incoming body from UI:", raw);
 
   // Normalize incoming identifiers from UI components
   const item_id =
-    raw.item_id ??
-    raw.id ??
-    raw.imdb_id ??
-    raw.imdbId ??
-    raw.movieId ??
-    null;
+    raw.item_id ?? raw.id ?? raw.imdb_id ?? raw.imdbId ?? raw.movieId ?? null;
 
   const event_type = raw.event_type ?? "like";
   const context = raw.context && typeof raw.context === "object" ? raw.context : undefined;
@@ -47,38 +47,42 @@ export async function POST(req: NextRequest) {
   const registeredUserId = jar.get("duku_user_id")?.value;
   const sessionId = await getOrCreateSessionId();
 
-  const payload: Record<string, any> = {
+  const payload = {
     user_id: registeredUserId ?? null,
     session_id: sessionId,
     item_id,
     event_type, // "like" | "view" | "click" | "save"
+    ...(context ? { context } : {}),
   };
-  if (context) {
-    payload.context = context;
-  }
 
   console.log("[API /api/ratings] sending to Merlin /api/v1/events", payload);
 
-  const r = await fetch(`${MERLIN}/api/v1/events`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-
-  const text = await r.text();
-  console.log("[API /api/ratings] Merlin response", { status: r.status, length: text.length });
-
-  if (!r.ok) {
-    console.error("[API /api/ratings] Merlin error body:", text.slice(0, 200));
-    return NextResponse.json({ error: text }, { status: r.status });
-  }
-
   try {
-    const json = JSON.parse(text);
-    console.log("[API /api/ratings] returning OK", json);
-    return NextResponse.json(json);
-  } catch {
-    console.error("[API /api/ratings] failed to parse Merlin JSON");
-    return NextResponse.json({ error: text }, { status: 502 });
+    const r = await fetch(`${MERLIN_BASE}/api/v1/events`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+      cache: "no-store",
+    });
+
+    const text = await r.text();
+    console.log("[API /api/ratings] Merlin response", { status: r.status, length: text.length });
+
+    if (!r.ok) {
+      console.error("[API /api/ratings] Merlin error body:", text.slice(0, 200));
+      return NextResponse.json({ error: text }, { status: r.status });
+    }
+
+    try {
+      const json = JSON.parse(text);
+      console.log("[API /api/ratings] returning OK", json);
+      return NextResponse.json(json);
+    } catch {
+      console.error("[API /api/ratings] failed to parse Merlin JSON");
+      return NextResponse.json({ error: text }, { status: 502 });
+    }
+  } catch (err: unknown) {
+    console.error("[API /api/ratings] fetch to Merlin failed:", err);
+    return NextResponse.json({ error: "upstream unavailable" }, { status: 502 });
   }
 }

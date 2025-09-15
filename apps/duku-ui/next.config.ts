@@ -17,14 +17,7 @@ const nextConfig: NextConfig = {
   images: {
     domains: ["image.tmdb.org", "m.media-amazon.com"], // add any poster/CDN hosts
   },
-  async rewrites() {
-    return [
-      {
-        source: "/api/:path*",
-        destination: `${API_BASE}/api/v1:path*`,
-      },
-    ];
-  },
+ 
   eslint: { ignoreDuringBuilds: true },
   typescript: { ignoreBuildErrors: true },  
 

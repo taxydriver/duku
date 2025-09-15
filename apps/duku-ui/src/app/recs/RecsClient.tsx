@@ -33,9 +33,10 @@ export default function RecsClient() {
     novel: String(novel),
   });
   if (seed_item_id) qs.set('seed_item_id', seed_item_id);
+  if (seed_item_id && !qs.get('seed')) qs.set('seed', seed_item_id);
 
   const { data, error, isLoading } = useSWR<{ items: RecItem[] }>(
-    `/api/v1/recs?${qs.toString()}`,
+    `/api/recs?${qs.toString()}`,
     fetcher
   );
 

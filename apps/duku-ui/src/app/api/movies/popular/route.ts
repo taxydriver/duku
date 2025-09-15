@@ -1,7 +1,11 @@
-// api/movies/popular/route.ts
+// apps/duku-ui/src/app/api/movies/popular/route.ts
 import { NextRequest, NextResponse } from "next/server";
 
-const MERLIN = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8080";
+// Ensure this route is always dynamic (avoid prerender/export surprises)
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
+const MERLIN_BASE = (process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8080").replace(/\/$/, "");
 const TMDB_API_KEY = process.env.TMDB_API_KEY ?? "";
 
 async function fetchPosterForImdbId(imdbId: string) {
@@ -35,23 +39,23 @@ export async function GET(req: NextRequest) {
     return Number.isFinite(n) && n > 0 ? n : 20;
   })();
 
-  const r = await fetch(`${MERLIN}/api/v1/movies/popular?k=${k}`, { cache: "no-store" });
+  const r = await fetch(`${MERLIN_BASE}/api/v1/movies/popular?k=${k}`, { cache: "no-store" });
   if (!r.ok) {
+    // Surface backend error to caller
     return NextResponse.json({ error: await r.text() }, { status: r.status });
   }
 
   const raw = await r.json();
 
-  // ✅ normalize shape: accept either array or {items: [...]}
-  const data: Array<{ item_id: string }> = Array.isArray(raw)
+  // Normalize (input): accept either array or {items: [...]}
+  const items: Array<{ item_id: string }> = Array.isArray(raw)
     ? raw
     : Array.isArray(raw?.items)
     ? raw.items
     : [];
 
-  const withPosters = await Promise.all(
-    data.map((d) => fetchPosterForImdbId(d.item_id))
-  );
+  const withPosters = await Promise.all(items.map((d) => fetchPosterForImdbId(d.item_id)));
 
+  // Return an object with `items` for backward compatibility with the UI
   return NextResponse.json({ items: withPosters });
 }
