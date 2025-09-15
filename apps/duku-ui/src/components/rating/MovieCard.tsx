@@ -1,10 +1,8 @@
-// apps/duku-ui/src/components/rating/MovieCard.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import Image from "next/image";
-import { toast } from "sonner";
 import { itemIdOf } from "@/lib/ids";
 
 const fetcher = (u: string) => fetch(u).then(r => r.json());
@@ -41,10 +39,7 @@ export function MovieCard({ movie, mode = "rating" }: { movie: Movie; mode?: "ra
     setSelected(movie.initialValue ?? 0);
   }, [itemId]); // ← key by itemId so we don't clobber optimistic state
 
-  // if server later confirms a like, upgrade (never downgrade)
-  useEffect(() => {
-    if (movie.initialValue === 1) setSelected((s) => (s === 1 ? 1 : 1));
-  }, [movie.initialValue]);
+  
 
   const optimisticMutate = (val: 0 | 1) =>
     mutate(
@@ -75,7 +70,7 @@ export function MovieCard({ movie, mode = "rating" }: { movie: Movie; mode?: "ra
 
   const toggleLike = async () => {
     if (!itemId || pending) {
-      if (!itemId) toast.error("Missing item id");
+      if (!itemId) console.error("[MovieCard] Missing item id");
       return;
     }
     const isLike = selected === 1;
@@ -94,22 +89,17 @@ export function MovieCard({ movie, mode = "rating" }: { movie: Movie; mode?: "ra
         res = await postLike(nextVal);
       }
       if (!res.ok) {
-        // rollback
-        setSelected(prevVal);
-        optimisticMutate(prevVal);
+        // rollback removed
         const msg = await res.text().catch(() => "");
         console.error("[toggleLike] backend failed", res.status, msg.slice(0, 200));
-        toast.error("That was a bit fast—please try again.");
+        // Keep optimistic UI; optionally you can surface a subtle inline indicator if desired.
         return;
       }
-      // ✅ no success toast (you asked to remove it)
-      // ✅ no mutate(ratingsKey) revalidation—keeps UI steady
+      
     } catch (err) {
-      // rollback on network error
-      setSelected(prevVal);
-      optimisticMutate(prevVal);
+      // rollback removed
       console.error("[toggleLike] network error", err);
-      toast.error("Network hiccup—try again.");
+      // Keeping optimistic UI to avoid flicker; consider retry logic if needed.
     } finally {
       setPending(false);
     }
@@ -126,7 +116,7 @@ export function MovieCard({ movie, mode = "rating" }: { movie: Movie; mode?: "ra
         aria-pressed={isLike}
         className={`aspect-[2/3] w-full relative ${
           isLike ? "ring-4 ring-green-500 ring-offset-2 ring-offset-background" : ""
-        } ${pending ? "opacity-60 cursor-not-allowed" : "hover:opacity-90"}`} // removed extra "transition" to reduce flicker
+        } ${pending ? "opacity-60 cursor-not-allowed" : ""}`}
       >
         {movie.posterUrl ? (
           <Image
@@ -154,7 +144,7 @@ export function MovieCard({ movie, mode = "rating" }: { movie: Movie; mode?: "ra
             onClick={toggleLike}
             disabled={pending}
             className={`px-2 py-1 rounded border text-xs ${
-              isLike ? "bg-green-600 text-white" : "hover:bg-accent"
+              isLike ? "bg-green-600 text-white" : ""
             } ${pending ? "opacity-60 cursor-not-allowed" : ""}`}
           >
             {isLike ? "Liked" : "Like"}
