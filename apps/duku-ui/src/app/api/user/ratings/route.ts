@@ -1,88 +1,60 @@
-import { NextRequest, NextResponse } from "next/server";
+// apps/duku-ui/src/app/api/user/ratings/route.ts
+import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 
-const MERLIN = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8080";
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
-type CacheEntry = {
-  timestamp: number;
-  data: Array<{ item_id: string; value: number }>; // always an array
-};
+const MERLIN_BASE = (process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8080").replace(/\/$/, "");
 
-const CACHE_TTL = 30 * 1000; // base 30s
-const RATE_LIMIT_BACKOFF = 15 * 1000; // extend TTL on 429s to calm down bursts
-const cache = new Map<string, CacheEntry>();
-const inflight = new Map<string, Promise<NextResponse>>();
+// tiny cache
+const mem = new Map<string, { at: number; data: any }>();
+const TTL_OK = 5_000;   // 5s
+const TTL_BAD = 2_000;  // 2s
 
-function buildCacheKey(userId: string | null, sessionId: string | null) {
-  return `user:${userId ?? "null"}|session:${sessionId ?? "null"}`;
-}
-
-export async function GET(_req: NextRequest) {
+export async function GET() {
   const jar = await cookies();
-  const userId = jar.get("duku_user_id")?.value || null;
-  const sessionId = userId ? null : jar.get("duku_uid")?.value || null;
+  const user = jar.get("duku_user_id")?.value ?? "";
+  const session = jar.get("duku_session_id")?.value ?? "";
 
-  const cacheKey = buildCacheKey(userId, sessionId);
-
-  const now = Date.now();
-  const cached = cache.get(cacheKey);
-  if (cached && now - cached.timestamp < CACHE_TTL) {
-    return NextResponse.json(cached.data, {
-      headers: { "Cache-Control": "private, max-age=15, stale-while-revalidate=60" },
-    });
+  const cacheKey = `ratings:u=${user}:s=${session}`;
+  const hit = mem.get(cacheKey);
+  if (hit && Date.now() - hit.at < TTL_OK) {
+    return NextResponse.json(hit.data);
   }
 
-  if (inflight.has(cacheKey)) return inflight.get(cacheKey)!;
+  const qs = new URLSearchParams();
+  if (user) qs.set("user_id", user);
+  if (session) qs.set("session_id", session);
+  const url = `${MERLIN_BASE}/api/v1/user/ratings?${qs.toString()}`;
 
-  const fetchPromise = (async () => {
-    try {
-      const qs = new URLSearchParams();
-      if (userId) qs.set("user_id", userId);
-      if (sessionId) qs.set("session_id", sessionId);
+  try {
+    const r = await fetch(url, { cache: "no-store" });
 
-      const r = await fetch(`${MERLIN}/api/v1/user/ratings?${qs.toString()}`, { cache: "no-store" });
-
-      // If backend rate limits or errors, return a safe empty array and cache it briefly
-      if (!r.ok) {
-        const status = r.status;
-        const bodyText = await r.text().catch(() => "");
-        // store empty array so client UI doesn't crash (.forEach on undefined)
-        const empty: Array<{ item_id: string; value: number }> = [];
-        const ttl = status === 429 ? RATE_LIMIT_BACKOFF : 5_000; // back off more on 429
-        cache.set(cacheKey, { timestamp: Date.now() - (CACHE_TTL - ttl), data: empty });
-        inflight.delete(cacheKey);
-        return NextResponse.json(empty, { status: 200, headers: { "X-Backend-Status": String(status), "X-Backend-Error": bodyText.slice(0, 120) } });
-      }
-
-      const raw = (await r.json()) as Array<{ item_id: string; event_type?: string; value?: number }>;
-
-      const latest = new Map<string, number>();
-      for (const ev of raw || []) {
-        const v = typeof ev.value === "number"
-          ? ev.value
-          : ev.event_type === "like" ? 1
-          : ev.event_type === "star" ? 5
-          : ev.event_type === "unlike" ? -1
-          : 0;
-        latest.set(ev.item_id, v);
-      }
-
-      const normalized = [...latest.entries()].map(([item_id, value]) => ({ item_id, value }));
-      cache.set(cacheKey, { timestamp: Date.now(), data: normalized });
-      inflight.delete(cacheKey);
-
-      return NextResponse.json(normalized, {
-        headers: { "Cache-Control": "private, max-age=15, stale-while-revalidate=60" },
+    if (r.status === 429) {
+      const payload: any[] = [];
+      mem.set(cacheKey, { at: Date.now(), data: payload });
+      return new NextResponse(JSON.stringify(payload), {
+        status: 200,
+        headers: { "Content-Type": "application/json", "X-Mode": "degraded" },
       });
-    } catch (err: any) {
-      // Network failure: answer with empty and short cache
-      const empty: Array<{ item_id: string; value: number }> = [];
-      cache.set(cacheKey, { timestamp: Date.now() - (CACHE_TTL - 5000), data: empty });
-      inflight.delete(cacheKey);
-      return NextResponse.json(empty, { status: 200, headers: { "X-Error": String(err?.message || err) } });
     }
-  })();
 
-  inflight.set(cacheKey, fetchPromise);
-  return fetchPromise;
+    if (!r.ok) {
+      const text = await r.text();
+      // cache briefly to avoid hammering on repeated failures
+      mem.set(cacheKey, { at: Date.now(), data: [] });
+      return new NextResponse(text || "Upstream error", { status: r.status });
+    }
+
+    const data = await r.json();
+    mem.set(cacheKey, { at: Date.now(), data });
+    return NextResponse.json(data);
+  } catch {
+    mem.set(cacheKey, { at: Date.now(), data: [] });
+    return new NextResponse(JSON.stringify([]), {
+      status: 200,
+      headers: { "Content-Type": "application/json", "X-Mode": "degraded" },
+    });
+  }
 }
