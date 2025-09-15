@@ -7,10 +7,6 @@ export const revalidate = 0;
 
 const MERLIN_BASE = (process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8080").replace(/\/$/, "");
 
-// tiny cache
-const mem = new Map<string, { at: number; data: any }>();
-const TTL_OK = 5_000;   // 5s
-const TTL_BAD = 2_000;  // 2s
 
 export async function GET(_req: NextRequest) {
   try {
