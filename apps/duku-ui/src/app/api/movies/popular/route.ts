@@ -5,7 +5,8 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 const MERLIN_BASE = (process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8080").replace(/\/$/, "");
-const TMDB_API_KEY = process.env.TMDB_API_KEY ?? "";
+const TMDB_API_KEY = process.env.NEXT_PUBLIC_TMDB_API_KEY || process.env.TMDB_API_KEY || "";
+
 
 // tiny in-memory cache to soften 429s
 const mem = new Map<string, { at: number; data: any }>();
@@ -23,6 +24,7 @@ async function fetchPosterForImdbId(imdbId: string) {
     if (!resp.ok) return { item_id: imdbId, title: null, poster: null };
     const json = await resp.json();
     const movie = json.movie_results?.[0];
+    console.log('Fetched poster for', imdbId, '->', movie?.title, movie?.poster_path);
     return {
       item_id: imdbId,
       title: movie?.title ?? null,
