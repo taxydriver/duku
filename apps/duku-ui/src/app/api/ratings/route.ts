@@ -1,4 +1,3 @@
-// apps/duku-ui/src/app/api/ratings/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 
@@ -7,8 +6,45 @@ export const revalidate = 0;
 
 const MERLIN_BASE = (process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8080").replace(/\/$/, "");
 
-// ---- NEW: in-process single-flight map to dedupe concurrent writes
+// --- single-flight to dedupe concurrent toggles for same (session,item)
 const inflight = new Map<string, Promise<Response>>();
+
+// --- per-session simple token bucket (pace to ~5 req/sec)
+const pace = new Map<string, { tokens: number; last: number }>();
+const BUCKET_SIZE = 5;
+const REFILL_MS = 1000;
+
+async function rateLimit(sessionId: string) {
+  const now = Date.now();
+  const s = pace.get(sessionId) ?? { tokens: BUCKET_SIZE, last: now };
+  // refill
+  const delta = now - s.last;
+  if (delta > 0) {
+    const refill = Math.floor(delta / REFILL_MS) * BUCKET_SIZE;
+    s.tokens = Math.min(BUCKET_SIZE, s.tokens + refill);
+    s.last = now;
+  }
+  if (s.tokens <= 0) {
+    // wait a little and try once more
+    await new Promise((r) => setTimeout(r, 220));
+    return rateLimit(sessionId);
+  }
+  s.tokens -= 1;
+  pace.set(sessionId, s);
+}
+
+// backoff on 429/5xx, up to ~2s total
+async function fetchWithBackoff(url: string, init: RequestInit, attempts = 4): Promise<Response> {
+  let delay = 200;
+  for (let i = 0; i < attempts; i++) {
+    const r = await fetch(url, { ...init, cache: "no-store", keepalive: true });
+    if (r.status !== 429 && r.status < 500) return r;
+    if (i === attempts - 1) return r;
+    await new Promise((res) => setTimeout(res, delay + Math.random() * 150));
+    delay *= 2;
+  }
+  return fetch(url, init);
+}
 
 async function getOrCreateSessionId() {
   const jar = await cookies();
@@ -22,46 +58,27 @@ async function getOrCreateSessionId() {
       maxAge: 60 * 60 * 24 * 365,
       secure: process.env.NODE_ENV === "production",
     });
-    console.log("[API /api/ratings] assigned new guest session_id:", id);
-  } else {
-    console.log("[API /api/ratings] found existing session_id:", id);
   }
   return id;
 }
 
-// ---- NEW: small retry helper that backs off on 429/5xx
-async function fetchWithBackoff(url: string, init: RequestInit, attempts = 4): Promise<Response> {
-  let delay = 200; // ms
-  for (let i = 0; i < attempts; i++) {
-    const r = await fetch(url, { ...init, cache: "no-store", keepalive: true });
-    // success or client error other than 429 -> return immediately
-    if (r.status !== 429 && r.status < 500) return r;
-    if (i === attempts - 1) return r;
-    await new Promise((res) => setTimeout(res, delay + Math.random() * 150));
-    delay *= 2;
-  }
-  // unreachable, but types like it
-  return fetch(url, init);
-}
-
 export async function POST(req: NextRequest) {
   const raw = (await req.json().catch(() => ({}))) ?? {};
-  console.log("[API /api/ratings] incoming body from UI:", raw);
-
   const item_id =
     raw.item_id ?? raw.id ?? raw.imdb_id ?? raw.imdbId ?? raw.movieId ?? null;
-
   const event_type = raw.event_type ?? "like";
   const context = raw.context && typeof raw.context === "object" ? raw.context : undefined;
 
   if (!item_id) {
-    console.error("[API /api/ratings] missing item_id");
     return NextResponse.json({ error: "item_id is required" }, { status: 400 });
   }
 
   const jar = await cookies();
   const registeredUserId = jar.get("duku_user_id")?.value;
   const sessionId = await getOrCreateSessionId();
+
+  // pace requests per session to avoid upstream 429s
+  await rateLimit(sessionId);
 
   const payload = {
     user_id: registeredUserId ?? null,
@@ -71,14 +88,9 @@ export async function POST(req: NextRequest) {
     ...(context ? { context } : {}),
   };
 
-  console.log("[API /api/ratings] sending to Merlin /api/v1/events", payload);
-
-  // ---- NEW: single-flight key to prevent duplicate concurrent posts
   const key = `${sessionId}:${item_id}:${event_type}`;
   if (inflight.has(key)) {
-    console.log("[API /api/ratings] deduped concurrent POST", key);
     await inflight.get(key);
-    // Return a lightweight OK so the UI can optimistically move on
     return NextResponse.json({ ok: true, deduped: true });
   }
 
@@ -91,24 +103,23 @@ export async function POST(req: NextRequest) {
       });
 
       const text = await r.text();
-      console.log("[API /api/ratings] Merlin response", { status: r.status, length: text.length });
+
+      // If still 429 after our pacing and backoff, swallow and return 200 so UI stays happy.
+      if (r.status === 429) {
+        return NextResponse.json({ ok: false, rate_limited: true }, { status: 200 });
+      }
 
       if (!r.ok) {
-        // surface 429 so the client could choose to retry later if needed
-        console.error("[API /api/ratings] Merlin error body:", text.slice(0, 200));
         return NextResponse.json({ error: text || `HTTP ${r.status}` }, { status: r.status });
       }
 
       try {
         const json = JSON.parse(text);
-        console.log("[API /api/ratings] returning OK", json);
         return NextResponse.json(json);
       } catch {
-        console.error("[API /api/ratings] failed to parse Merlin JSON");
         return NextResponse.json({ error: text }, { status: 502 });
       }
-    } catch (err: unknown) {
-      console.error("[API /api/ratings] fetch to Merlin failed:", err);
+    } catch (err) {
       return NextResponse.json({ error: "upstream unavailable" }, { status: 502 });
     }
   })();
