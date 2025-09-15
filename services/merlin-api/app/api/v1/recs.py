@@ -53,7 +53,7 @@ _pool = ConnectionPool(
     _DSN,
     min_size=1,
     max_size=2,          # keep this low; Supabase pooler is finite
-    timeout=10
+    timeout=10,
     kwargs={"autocommit": True},
 )
 
