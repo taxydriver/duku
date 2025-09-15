@@ -1,0 +1,50 @@
+# render.yaml — place this at the repo root (DUKU/)
+services:
+  - type: web
+    name: merlin-api
+    rootDir: services/merlin-api
+    env: docker
+    plan: free
+    autoDeploy: true
+    healthCheckPath: /healthz
+    envVars:
+      # --- REQUIRED (fill in on Render after first deploy or now if you like) ---
+      - key: DATABASE_URL              # Supabase direct connection string
+        sync: false
+      - key: FRONTEND_ORIGIN           # e.g. https://duku-ui-xxxxx.onrender.com (set after UI URL is known)
+        sync: false
+
+      # --- OPTIONAL (only if you use Supabase Storage for artifacts) ---
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_STORAGE_BUCKET
+        sync: false
+
+      # --- OPTIONAL (your project uses these for local training / artifact paths) ---
+      - key: MODEL_ARTIFACT_DIR
+        value: /models
+      - key: ARTIFACT_URI_BASE
+        value: file:///models/
+
+  - type: web
+    name: duku-ui
+    rootDir: apps/duku-ui
+    env: node
+    plan: free
+    autoDeploy: true
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    envVars:
+      # Point UI → API (set this to the API URL after merlin-api is live)
+      - key: NEXT_PUBLIC_API_BASE
+        sync: false
+
+      # If you fetch posters client-side:
+      - key: NEXT_PUBLIC_TMDB_API_KEY
+        sync: false
+
+      # Optional, Render usually sets it
+      - key: NODE_ENV
+        value: production
