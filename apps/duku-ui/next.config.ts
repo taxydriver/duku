@@ -1,14 +1,29 @@
+// apps/duku-ui/next.config.ts
 import type { NextConfig } from "next";
 
+const isProd = process.env.NODE_ENV === "production";
+
+// Fallback to localhost in dev, require explicit value in prod
+const API_BASE =
+  process.env.NEXT_PUBLIC_API_BASE || (isProd ? undefined : "http://localhost:8000");
+
+if (isProd && !API_BASE) {
+  throw new Error(
+    "NEXT_PUBLIC_API_BASE is required in production. Set it in your Render env vars."
+  );
+}
+
 const nextConfig: NextConfig = {
-  // …your existing config
   images: {
-    // either add domains:
-    domains: ["image.tmdb.org"],
-    // or use remotePatterns:
-    // remotePatterns: [
-    //   { protocol: "https", hostname: "image.tmdb.org" }
-    // ],
+    domains: ["image.tmdb.org", "m.media-amazon.com"], // add any poster/CDN hosts
+  },
+  async rewrites() {
+    return [
+      {
+        source: "/api/:path*",
+        destination: `${API_BASE}/api/:path*`,
+      },
+    ];
   },
 };
 
