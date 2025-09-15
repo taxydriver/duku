@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const TMDB_KEY = process.env.TMDB_API_KEY!;
+
+const TMDB_API_KEY =
+  process.env.NEXT_PUBLIC_TMDB_API_KEY || process.env.TMDB_API_KEY || "";
 const IMG_BASE = "https://image.tmdb.org/t/p";
 const IMG_SIZE = "w342";
 
