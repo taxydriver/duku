@@ -5,6 +5,7 @@ import json
 from typing import List, Optional, Tuple, Any, Dict
 
 import psycopg
+from psycopg_pool import ConnectionPool
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
@@ -26,15 +27,6 @@ def _dsn_with_ssl_keepalives(raw: str) -> str:
     return dsn
 
 
-def _pg():
-    """
-    Return a new autocommit psycopg connection.
-    Use with context manager: `with _pg() as conn, conn.cursor() as cur: ...`
-    """
-    raw = os.environ["DATABASE_URL"]
-    dsn = _dsn_with_ssl_keepalives(raw)
-    return psycopg.connect(dsn, autocommit=True)
-
 _itemknn = None
 def _get_itemknn():
     global _itemknn
@@ -54,10 +46,22 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL env var not set for merlin-api")
 
+# Build DSN with SSL and keepalives, then create a small global pool
+_DSN = _dsn_with_ssl_keepalives(DATABASE_URL)
+_pool = ConnectionPool(
+    _DSN,
+    min_size=1,
+    max_size=5,          # keep this low; Supabase pooler is finite
+    max_wait=10,         # seconds to wait for a free connection before error
+    kwargs={"autocommit": True},
+)
 
-def _pg():
-    # psycopg 3 connection, ensure sslmode if provided in URL
-    return psycopg.connect(DATABASE_URL)
+def _pg_conn():
+    """Borrow a pooled connection. Usage:
+        with _pg_conn() as conn, conn.cursor() as cur:
+            cur.execute(...)
+    """
+    return _pool.connection()
 
 
 # ---------- Models ----------
@@ -148,7 +152,7 @@ def _ensure_item(conn, item_id: str, meta: dict | None = None):
 @router.post("/recommend", response_model=RecommendResponse)
 async def recommend(req: RecommendRequest):
     """Unified recommendation endpoint used by the UI."""
-    with _pg() as conn:
+    with _pg_conn() as conn:
         # pick a model entry so response includes id/version
         target_model_id = "mf_als" if req.algo.lower().startswith("mf") else "cf_itemknn"
         model_id, version = _get_latest_model(conn, target_model_id)
@@ -177,7 +181,7 @@ async def register_user(req: RegisterRequest):
         "insert into public.users (email, locale, name) "
         "values (%s, %s, %s) returning user_id"
     )
-    with _pg() as conn, conn.cursor() as cur:
+    with _pg_conn() as conn, conn.cursor() as cur:
         cur.execute(sql_sel, (req.email,))
         row = cur.fetchone()
         if row:
@@ -227,7 +231,7 @@ async def record_event(ev: EventIn):
         values (%s, %s, %s, %s, %s::jsonb)
     """
 
-    with _pg() as conn:
+    with _pg_conn() as conn:
         # Ensure the item exists to satisfy the FK (optionally using meta if your catalog supports it)
         meta = raw_ctx.get("meta") if isinstance(raw_ctx, dict) else None
         _ensure_item(conn, ev.item_id, meta)
@@ -288,7 +292,7 @@ async def get_user_ratings(
     """
 
     out: List[UserRating] = []
-    with _pg() as conn, conn.cursor() as cur:
+    with _pg_conn() as conn, conn.cursor() as cur:
         cur.execute(sql, (who, limit))
         for item_id, value in cur.fetchall():
             out.append(UserRating(item_id=item_id, value=int(value)))
@@ -303,7 +307,7 @@ async def movies_popular(k: int = Query(default=20, ge=1, le=200)):
         "group by item_id order by c desc limit %s"
     )
     items: List[dict] = []
-    with _pg() as conn, conn.cursor() as cur:
+    with _pg_conn() as conn, conn.cursor() as cur:
         cur.execute(sql, (k,))
         rows = cur.fetchall()
         items = [{"item_id": r[0]} for r in rows]
