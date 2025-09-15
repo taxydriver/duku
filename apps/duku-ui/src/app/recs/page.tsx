@@ -1,7 +1,10 @@
 // apps/duku-ui/src/app/recs/page.tsx
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
+import { useEffect, useMemo, useState , Suspense } from 'react';
 import useSWR from "swr";
 import { useSearchParams } from "next/navigation";
 import { MovieCard } from "@/components/rating/MovieCard";
@@ -16,7 +19,7 @@ type RecItem = {
   posterUrl?: string | null;
 };
 
-export default function RecsPage() {
+function RecsInner() {
   const sp = useSearchParams();
   const qs = sp.toString();
   const key = qs ? `/api/recs?${qs}` : null;
@@ -127,5 +130,13 @@ export default function RecsPage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function RecsPage() {
+  return (
+    <Suspense fallback={<div className="p-6">Loading…</div>}>
+      <RecsInner />
+    </Suspense>
   );
 }

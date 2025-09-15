@@ -1,6 +1,9 @@
 // apps/duku-ui/src/app/algo/page.tsx
 "use client";
 
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
