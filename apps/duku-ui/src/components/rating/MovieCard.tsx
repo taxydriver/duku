@@ -1,4 +1,3 @@
-// apps/duku-ui/src/components/rating/MovieCard.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -34,68 +33,93 @@ export function MovieCard({ movie, mode = "rating" }: { movie: Movie; mode?: "ra
 
   // hydrate local state
   const [selected, setSelected] = useState<number>(movie.initialValue ?? 0);
+  const [pending, setPending] = useState(false);
+  // Initialize from server state only on first mount / when the item changes.
   useEffect(() => {
-    console.log("[MovieCard mount/update]", {
-      title: movie.title,
-      itemId,
-      initialValue: movie.initialValue,
-    });
     setSelected(movie.initialValue ?? 0);
-  }, [movie.initialValue, itemId, movie.title]);
+    // (Optional) console for first mount per item:
+    // console.log("[MovieCard init]", { title: movie.title, itemId, initialValue: movie.initialValue });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [itemId]);
 
-  // toggle like
+  // If server later reports a like and we haven't got one locally, gently sync up.
+  useEffect(() => {
+    if (!pending && (movie.initialValue ?? 0) === 1 && selected === 0) {
+      setSelected(1);
+    }
+  }, [movie.initialValue, pending, selected]);
+
+  const optimisticMutate = (val: 0 | 1) => {
+    mutate(
+      ratingsKey,
+      (prev: Array<{ item_id: string; value: number }> | undefined) => {
+        const base = Array.isArray(prev) ? [...prev] : [];
+        const i = base.findIndex(r => r.item_id === itemId);
+        if (i >= 0) base[i] = { item_id: itemId!, value: val };
+        else base.unshift({ item_id: itemId!, value: val });
+        return val === 0 ? base.filter(r => r.item_id !== itemId) : base;
+      },
+      { revalidate: false }
+    );
+  };
+
+  async function postLike(value: 0 | 1) {
+    const res = await fetch("/api/ratings", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ item_id: itemId, event_type: "like", context: { value } }),
+      cache: "no-store",
+      keepalive: true,
+    });
+    return res;
+  }
+
   const toggleLike = async () => {
     console.log("[toggleLike click]", { itemId, selected });
-    if (!itemId) {
-      toast.error("Missing item id");
+    if (!itemId || pending) {
+      if (!itemId) toast.error("Missing item id");
       return;
     }
 
-    if (selected !== 1) {
-       console.log("[UI] Like -> POST /api/ratings", { item_id: itemId, event_type: "like" });
-      try {
-        const res = await fetch("/api/ratings", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          //body: JSON.stringify({ item_id: itemId, event_type: "like" }),
-          body: JSON.stringify({ item_id: itemId, event_type: "like", context: { value: 1 } }), // extra context for Merlin
-        });
-        const json = await res.json();
-        console.log("[toggleLike backend response]", { status: res.status, json });
-        if (!res.ok) throw new Error(json?.error ?? "Failed");
+    const isLike = selected === 1;
+    const nextVal: 0 | 1 = isLike ? 0 : 1;
+    const prevVal: 0 | 1 = isLike ? 1 : 0;
 
-        setSelected(1);
-        mutate(
-          ratingsKey,
-          (prev: Array<{ item_id: string; value: number }> | undefined) => {
-            console.log("[mutate add like]", { prevCount: Array.isArray(prev) ? prev.length : 0, add: { item_id: itemId, value: 1 } });
-            const base = Array.isArray(prev) ? prev : [];
-            const without = base.filter((r) => r.item_id !== itemId);
-            return [...without, { item_id: itemId, value: 1 }];
-          },
-          false
-        );
-        toast.success("Liked");
-      } catch (err: any) {
-        toast.error(`Failed to like: ${err?.message ?? "Unknown error"}`);
+    // Optimistic UI + cache
+    setSelected(nextVal);
+    optimisticMutate(nextVal);
+
+    setPending(true);
+    try {
+      let res = await postLike(nextVal);
+
+      // Gentle retry on 429 once
+      if (res.status === 429) {
+        await new Promise(r => setTimeout(r, 600));
+        res = await postLike(nextVal);
       }
-    } else {
-      console.log("[toggleLike turn off]", { itemId });
-      await fetch("/api/ratings", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ item_id: itemId, event_type: "like", context: { value: 0 } }),
-        });
-      setSelected(0);
-      mutate(
-        ratingsKey,
-        (prev: Array<{ item_id: string; value: number }> | undefined) => {
-          console.log("[mutate remove like]", { prev, remove: itemId });
-          const base = Array.isArray(prev) ? prev : [];
-          return base.filter((r) => r.item_id !== itemId);
-        },
-        false
-      );
+
+      if (!res.ok) {
+        // Roll back
+        setSelected(prevVal);
+        optimisticMutate(prevVal);
+        const msg = await res.text().catch(() => "");
+        console.error("[toggleLike] backend failed", res.status, msg.slice(0, 200));
+        toast.error("That was a bit fast—please try again.");
+        return;
+      }
+
+      // Background revalidation to sync across tabs
+      mutate(ratingsKey);
+      if (nextVal === 1) toast.success("Liked");
+    } catch (err) {
+      // Roll back on network error
+      setSelected(prevVal);
+      optimisticMutate(prevVal);
+      console.error("[toggleLike] network error", err);
+      toast.error("Network hiccup—try again.");
+    } finally {
+      setPending(false);
     }
   };
 
@@ -106,10 +130,11 @@ export function MovieCard({ movie, mode = "rating" }: { movie: Movie; mode?: "ra
       <button
         type="button"
         onClick={toggleLike}
+        disabled={pending}
         aria-pressed={isLike}
         className={`aspect-[2/3] w-full relative transition ${
           isLike ? "ring-4 ring-green-500 ring-offset-2 ring-offset-background" : "hover:opacity-90"
-        }`}
+        } ${pending ? "opacity-60 cursor-not-allowed" : ""}`}
       >
         {movie.posterUrl ? (
           <Image src={movie.posterUrl} alt={movie.title ?? "poster"} fill sizes="200px" className="object-cover" />
@@ -128,9 +153,10 @@ export function MovieCard({ movie, mode = "rating" }: { movie: Movie; mode?: "ra
           <button
             type="button"
             onClick={toggleLike}
+            disabled={pending}
             className={`px-2 py-1 rounded border text-xs transition ${
               isLike ? "bg-green-600 text-white" : "hover:bg-accent"
-            }`}
+            } ${pending ? "opacity-60 cursor-not-allowed" : ""}`}
           >
             {isLike ? "Liked" : "Like"}
           </button>
