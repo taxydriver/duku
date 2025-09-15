@@ -16,7 +16,7 @@ def _dsn_with_ssl_keepalives(raw: str) -> str:
     Ensure sslmode=require and TCP keepalives for stability on Render + Supabase.
     Works with both direct (5432) and pooler (6543) URLs.
     """
-    dsn = raw
+    dsn = (raw or "").strip()  # <-- trims any stray newline/space
     sep = "&" if "?" in dsn else "?"
     if "sslmode=" not in dsn:
         dsn += f"{sep}sslmode=require"
@@ -25,6 +25,7 @@ def _dsn_with_ssl_keepalives(raw: str) -> str:
     if "keepalives=" not in dsn:
         dsn += f"{sep}keepalives=1&keepalives_idle=30&keepalives_interval=10&keepalives_count=5"
     return dsn
+
 
 
 _itemknn = None
@@ -51,7 +52,8 @@ _DSN = _dsn_with_ssl_keepalives(DATABASE_URL)
 _pool = ConnectionPool(
     _DSN,
     min_size=1,
-    max_size=5,          # keep this low; Supabase pooler is finite
+    max_size=2,          # keep this low; Supabase pooler is finite
+    timeout=10
     kwargs={"autocommit": True},
 )
 
