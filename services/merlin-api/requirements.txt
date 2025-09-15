@@ -13,6 +13,7 @@ pandas
 scikit-learn
 faiss-cpu
 psycopg[binary]
+psycopg_pool 
 SQLAlchemy
 
 implicit
