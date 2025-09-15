@@ -10,6 +10,31 @@ from pydantic import BaseModel
 
 from app.serve.itemknn_loader import ItemKNN
 
+def _dsn_with_ssl_keepalives(raw: str) -> str:
+    """
+    Ensure sslmode=require and TCP keepalives for stability on Render + Supabase.
+    Works with both direct (5432) and pooler (6543) URLs.
+    """
+    dsn = raw
+    sep = "&" if "?" in dsn else "?"
+    if "sslmode=" not in dsn:
+        dsn += f"{sep}sslmode=require"
+        sep = "&"
+    # Reduce idle disconnects when using the pooler or long-lived connections
+    if "keepalives=" not in dsn:
+        dsn += f"{sep}keepalives=1&keepalives_idle=30&keepalives_interval=10&keepalives_count=5"
+    return dsn
+
+
+def _pg():
+    """
+    Return a new autocommit psycopg connection.
+    Use with context manager: `with _pg() as conn, conn.cursor() as cur: ...`
+    """
+    raw = os.environ["DATABASE_URL"]
+    dsn = _dsn_with_ssl_keepalives(raw)
+    return psycopg.connect(dsn, autocommit=True)
+
 _itemknn = None
 def _get_itemknn():
     global _itemknn
